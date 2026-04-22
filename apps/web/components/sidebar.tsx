@@ -23,7 +23,7 @@ export function Sidebar({ email }: { email: string }) {
 
       <nav className="flex-1 space-y-0.5 px-3">
         {navItems.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href;
+          const active = href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
 
           return (
             <Link

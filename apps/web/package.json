@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@governix/db": "*",
+    "@governix/policy-engine": "*",
     "@governix/shared": "*",
     "bcryptjs": "^3.0.2",
     "clsx": "^2.1.1",
