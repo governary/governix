@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "preserve",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@governix/shared/*": ["packages/shared/src/*"],
+      "@governix/db/*": ["packages/db/src/*"],
+      "@governix/policy-engine/*": ["packages/policy-engine/src/*"],
+      "@governix/costing/*": ["packages/costing/src/*"],
+      "@governix/runtime-sdk-ts/*": ["packages/runtime-sdk-ts/src/*"]
+    }
+  }
+}
+

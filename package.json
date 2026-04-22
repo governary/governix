@@ -1,0 +1,26 @@
+{
+  "name": "governix",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @governix/web",
+    "build": "npm run build --workspace @governix/web",
+    "start": "npm run start --workspace @governix/web",
+    "lint": "npm run lint --workspace @governix/web",
+    "typecheck": "npm run typecheck --workspace @governix/web && npm run typecheck --workspace @governix/shared && npm run typecheck --workspace @governix/db && npm run typecheck --workspace @governix/policy-engine && npm run typecheck --workspace @governix/costing && npm run typecheck --workspace @governix/runtime-sdk-ts",
+    "db:generate": "npm run db:generate --workspace @governix/db",
+    "db:migrate": "npm run db:migrate --workspace @governix/db",
+    "db:seed": "npm run db:seed --workspace @governix/db",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.2",
+    "typescript": "^5.8.3"
+  }
+}
+
