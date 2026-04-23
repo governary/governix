@@ -1,9 +1,12 @@
-import { and, desc, eq, ilike, or } from "drizzle-orm";
+import { compare } from "bcryptjs";
+import { and, count, desc, eq, gte, ilike, lt, or, sum } from "drizzle-orm";
 
 import type {
   CreateApplicationInput,
   CreatePolicyInput,
   CreateTenantInput,
+  PolicyEvaluationResult,
+  RuntimeEventRequest,
   TenantListQuery,
   UpdateApplicationInput,
   UpdatePolicyInput,
@@ -12,7 +15,22 @@ import type {
 } from "@governix/shared";
 
 import { getDb } from "./client";
-import { applications, tenantPolicies, tenantQuotas, tenants, users } from "./schema";
+import { applications, policyEvaluationLogs, requestLedger, tenantPolicies, tenantQuotas, tenants, users } from "./schema";
+
+function getMonthRange(referenceAt: Date) {
+  const start = new Date(Date.UTC(referenceAt.getUTCFullYear(), referenceAt.getUTCMonth(), 1, 0, 0, 0, 0));
+  const end = new Date(Date.UTC(referenceAt.getUTCFullYear(), referenceAt.getUTCMonth() + 1, 1, 0, 0, 0, 0));
+
+  return { start, end };
+}
+
+function toNumericString(value: number | null | undefined, scale: number) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return null;
+  }
+
+  return value.toFixed(scale);
+}
 
 function buildTenantFilters(query: TenantListQuery) {
   const filters = [];
@@ -107,6 +125,17 @@ export const applicationRepository = {
     return application ?? null;
   },
 
+  async findAuthorizedRuntimeApplication(id: string, plaintextApiKey: string) {
+    const application = await this.findById(id);
+
+    if (!application || application.status !== "active") {
+      return null;
+    }
+
+    const isMatch = await compare(plaintextApiKey, application.apiKeyHash);
+    return isMatch ? application : null;
+  },
+
   async create(tenantId: string, input: CreateApplicationInput, apiKeyHash: string) {
     const [application] = await getDb()
       .insert(applications)
@@ -186,6 +215,25 @@ export const policyRepository = {
     return policy ?? null;
   },
 
+  async findLatestEnabledByTenantId(tenantId: string) {
+    const [policy] = await getDb()
+      .select()
+      .from(tenantPolicies)
+      .where(and(eq(tenantPolicies.tenantId, tenantId), eq(tenantPolicies.enabled, true)))
+      .orderBy(desc(tenantPolicies.createdAt))
+      .limit(1);
+
+    return policy ?? null;
+  },
+
+  async listEnabledByTenantId(tenantId: string) {
+    return getDb()
+      .select()
+      .from(tenantPolicies)
+      .where(and(eq(tenantPolicies.tenantId, tenantId), eq(tenantPolicies.enabled, true)))
+      .orderBy(desc(tenantPolicies.createdAt));
+  },
+
   async create(input: CreatePolicyInput) {
     const [policy] = await getDb()
       .insert(tenantPolicies)
@@ -255,5 +303,96 @@ export const quotaRepository = {
       .returning();
 
     return quota;
+  }
+};
+
+export const runtimeUsageRepository = {
+  async getCurrentMonthSnapshot(tenantId: string, referenceAt = new Date()) {
+    const { start, end } = getMonthRange(referenceAt);
+    const [snapshot] = await getDb()
+      .select({
+        requestCount: count(requestLedger.id),
+        inputTokens: sum(requestLedger.inputTokens),
+        outputTokens: sum(requestLedger.outputTokens),
+        estimatedCost: sum(requestLedger.estimatedCost)
+      })
+      .from(requestLedger)
+      .where(and(eq(requestLedger.tenantId, tenantId), gte(requestLedger.createdAt, start), lt(requestLedger.createdAt, end)));
+
+    return {
+      requestCount: Number(snapshot?.requestCount ?? 0),
+      inputTokens: Number(snapshot?.inputTokens ?? 0),
+      outputTokens: Number(snapshot?.outputTokens ?? 0),
+      estimatedCost: Number(snapshot?.estimatedCost ?? 0)
+    };
+  }
+};
+
+export const requestLedgerRepository = {
+  async create(input: RuntimeEventRequest, executor?: ReturnType<typeof getDb>) {
+    const db = executor ?? getDb();
+    const createdAt = new Date(input.timestamp);
+    const [entry] = await db
+      .insert(requestLedger)
+      .values({
+        requestId: input.requestId,
+        tenantId: input.tenant.tenantId,
+        applicationId: input.application.applicationId,
+        userId: input.tenant.userId,
+        sessionId: input.tenant.sessionId,
+        requestType: input.request.requestType,
+        rawQuerySummary: input.request.rawQuerySummary,
+        selectedModelId: input.policy.finalModelId ?? input.request.modelId,
+        selectedKbId: input.policy.finalKbId ?? input.request.kbId,
+        policyResultJson: input.policy satisfies PolicyEvaluationResult,
+        retrievalFilterJson: input.policy.retrievalFilter ?? null,
+        retrievedChunksJson: input.retrieval.chunkRefs,
+        generationSummaryText: input.generation.summary,
+        citationsPresent: input.generation.citationsPresent,
+        status: input.generation.status,
+        latencyMs: input.generation.latencyMs,
+        inputTokens: input.generation.inputTokens,
+        outputTokens: input.generation.outputTokens,
+        embeddingCount: input.generation.embeddingCount ?? 0,
+        estimatedCost: toNumericString(input.generation.estimatedCost, 6),
+        errorCode: input.error?.code ?? null,
+        errorMessage: input.error?.message ?? null,
+        createdAt
+      })
+      .returning();
+
+    return entry;
+  },
+
+  async findByRequestId(requestId: string) {
+    const [entry] = await getDb().select().from(requestLedger).where(eq(requestLedger.requestId, requestId)).limit(1);
+    return entry ?? null;
+  }
+};
+
+export const policyEvaluationLogRepository = {
+  async create(input: RuntimeEventRequest, executor?: ReturnType<typeof getDb>) {
+    const db = executor ?? getDb();
+    const createdAt = new Date(input.timestamp);
+    const [log] = await db
+      .insert(policyEvaluationLogs)
+      .values({
+        requestId: input.requestId,
+        tenantId: input.tenant.tenantId,
+        matchedPolicyIdsJson: input.policy.matchedPolicyIds,
+        finalAction: input.policy.finalAction,
+        finalModelId: input.policy.finalModelId ?? null,
+        finalKbId: input.policy.finalKbId ?? null,
+        reasonsJson: input.policy.reasons,
+        createdAt
+      })
+      .returning();
+
+    return log;
+  },
+
+  async findByRequestId(requestId: string) {
+    const [log] = await getDb().select().from(policyEvaluationLogs).where(eq(policyEvaluationLogs.requestId, requestId)).limit(1);
+    return log ?? null;
   }
 };

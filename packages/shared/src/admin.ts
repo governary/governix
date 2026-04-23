@@ -85,7 +85,9 @@ export const updatePolicySchema = createPolicySchema.omit({ tenantId: true }).pa
 export const policyTestRequestSchema = z.object({
   kbId: optionalNullableString,
   modelId: optionalNullableString,
-  requestType: requestTypeSchema
+  requestType: requestTypeSchema,
+  requireCitation: z.boolean().optional(),
+  requestRateSnapshot: optionalNullableNumber.optional()
 });
 
 export const upsertQuotaSchema = z
