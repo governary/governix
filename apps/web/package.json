@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.typecheck.json --pretty false"
   },
   "dependencies": {
+    "@governix/costing": "*",
     "@governix/db": "*",
     "@governix/policy-engine": "*",
     "@governix/shared": "*",

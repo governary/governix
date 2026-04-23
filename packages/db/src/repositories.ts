@@ -1,5 +1,5 @@
 import { compare } from "bcryptjs";
-import { and, count, desc, eq, gte, ilike, lt, or, sum } from "drizzle-orm";
+import { and, count, desc, eq, gte, ilike, inArray, lte, lt, or, sum } from "drizzle-orm";
 
 import type {
   CreateApplicationInput,
@@ -15,7 +15,7 @@ import type {
 } from "@governix/shared";
 
 import { getDb } from "./client";
-import { applications, policyEvaluationLogs, requestLedger, tenantPolicies, tenantQuotas, tenants, users } from "./schema";
+import { applications, policyEvaluationLogs, requestLedger, tenantPolicies, tenantQuotas, tenants, usageDaily, users } from "./schema";
 
 function getMonthRange(referenceAt: Date) {
   const start = new Date(Date.UTC(referenceAt.getUTCFullYear(), referenceAt.getUTCMonth(), 1, 0, 0, 0, 0));
@@ -116,8 +116,20 @@ export const tenantRepository = {
 };
 
 export const applicationRepository = {
+  async listAll() {
+    return getDb().select().from(applications).orderBy(desc(applications.createdAt));
+  },
+
   async listByTenantId(tenantId: string) {
     return getDb().select().from(applications).where(eq(applications.tenantId, tenantId)).orderBy(desc(applications.createdAt));
+  },
+
+  async listByIds(ids: string[]) {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    return getDb().select().from(applications).where(inArray(applications.id, ids)).orderBy(desc(applications.createdAt));
   },
 
   async findById(id: string) {
@@ -367,6 +379,22 @@ export const requestLedgerRepository = {
   async findByRequestId(requestId: string) {
     const [entry] = await getDb().select().from(requestLedger).where(eq(requestLedger.requestId, requestId)).limit(1);
     return entry ?? null;
+  },
+
+  async listByDateRange(input: { dateFrom: string; dateTo: string; tenantId?: string | null }) {
+    const start = new Date(`${input.dateFrom}T00:00:00Z`);
+    const end = new Date(`${input.dateTo}T23:59:59.999Z`);
+    const filters = [gte(requestLedger.createdAt, start), lte(requestLedger.createdAt, end)];
+
+    if (input.tenantId) {
+      filters.push(eq(requestLedger.tenantId, input.tenantId));
+    }
+
+    return getDb()
+      .select()
+      .from(requestLedger)
+      .where(and(...filters))
+      .orderBy(desc(requestLedger.createdAt));
   }
 };
 
@@ -394,5 +422,60 @@ export const policyEvaluationLogRepository = {
   async findByRequestId(requestId: string) {
     const [log] = await getDb().select().from(policyEvaluationLogs).where(eq(policyEvaluationLogs.requestId, requestId)).limit(1);
     return log ?? null;
+  }
+};
+
+export const usageDailyRepository = {
+  async replaceAggregateRow(
+    row: {
+      tenantId: string;
+      applicationId: string | null;
+      usageDate: string;
+      ragRequestCount: number;
+      retrieveCount: number;
+      generateCount: number;
+      inputTokens: number;
+      outputTokens: number;
+      embeddingCount: number;
+      estimatedCost: string;
+      blockedCount: number;
+      throttledCount: number;
+    }
+  ) {
+    const [result] = await getDb()
+      .insert(usageDaily)
+      .values(row)
+      .onConflictDoUpdate({
+        target: [usageDaily.tenantId, usageDaily.applicationId, usageDaily.usageDate],
+        set: {
+          ragRequestCount: row.ragRequestCount,
+          retrieveCount: row.retrieveCount,
+          generateCount: row.generateCount,
+          inputTokens: row.inputTokens,
+          outputTokens: row.outputTokens,
+          embeddingCount: row.embeddingCount,
+          estimatedCost: row.estimatedCost,
+          blockedCount: row.blockedCount,
+          throttledCount: row.throttledCount,
+          updatedAt: new Date()
+        }
+      })
+      .returning();
+
+    return result;
+  },
+
+  async listByDateRange(input: { dateFrom: string; dateTo: string; tenantId?: string | null }) {
+    const filters = [gte(usageDaily.usageDate, input.dateFrom), lte(usageDaily.usageDate, input.dateTo)];
+
+    if (input.tenantId) {
+      filters.push(eq(usageDaily.tenantId, input.tenantId));
+    }
+
+    return getDb()
+      .select()
+      .from(usageDaily)
+      .where(and(...filters))
+      .orderBy(desc(usageDaily.usageDate));
   }
 };
