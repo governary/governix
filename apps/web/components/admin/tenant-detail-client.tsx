@@ -53,7 +53,20 @@ type QuotaRecord = {
   updatedAt: string;
 };
 
-type TenantTab = "overview" | "applications" | "quota" | "policy";
+type LedgerShortcutRecord = {
+  requestId: string;
+  applicationId: string;
+  applicationName: string;
+  requestType: string;
+  selectedModelId: string | null;
+  selectedKbId: string | null;
+  status: string;
+  estimatedCost: string | null;
+  latencyMs: number | null;
+  createdAt: string;
+};
+
+type TenantTab = "overview" | "applications" | "quota" | "policy" | "ledger";
 
 const inputClassName =
   "block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 mono text-sm text-slate-900 transition-colors duration-150 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500";
@@ -64,7 +77,8 @@ const tabs: Array<{ id: TenantTab; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "applications", label: "Applications" },
   { id: "quota", label: "Quota" },
-  { id: "policy", label: "Policy" }
+  { id: "policy", label: "Policy" },
+  { id: "ledger", label: "Ledger" }
 ];
 
 export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string; initialTab: TenantTab }) {
@@ -72,6 +86,7 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
   const [applications, setApplications] = useState<ApplicationRecord[]>([]);
   const [applicationDrafts, setApplicationDrafts] = useState<Record<string, CreateApplicationInput>>({});
   const [policies, setPolicies] = useState<PolicyRecord[]>([]);
+  const [recentLedger, setRecentLedger] = useState<LedgerShortcutRecord[]>([]);
   const [quotaForm, setQuotaForm] = useState<UpsertQuotaInput>({
     requestLimitMonthly: null,
     tokenLimitMonthly: null,
@@ -103,17 +118,21 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
     setLoading(true);
 
     try {
-      const [tenantPayload, applicationsPayload, policiesPayload, quotaPayload] = await Promise.all([
+      const [tenantPayload, applicationsPayload, policiesPayload, quotaPayload, recentLedgerPayload] = await Promise.all([
         requestJson<TenantRecord>(`/api/tenants/${tenantId}`),
         requestJson<ApplicationRecord[]>(`/api/tenants/${tenantId}/applications`),
         requestJson<PolicyRecord[]>(`/api/tenants/${tenantId}/policies`),
-        requestJson<QuotaRecord | null>(`/api/tenants/${tenantId}/quotas`)
+        requestJson<QuotaRecord | null>(`/api/tenants/${tenantId}/quotas`),
+        requestJson<{ items: LedgerShortcutRecord[]; total: number; page: number; pageSize: number }>(
+          `/api/ledger?tenant_id=${tenantId}&status=all&date_from=2026-01-01&date_to=2026-12-31&page=1&page_size=20`
+        )
       ]);
 
       const nextTenant = tenantPayload.data ?? null;
       const nextApplications = applicationsPayload.data ?? [];
       const nextPolicies = policiesPayload.data ?? [];
       const nextQuota = quotaPayload.data ?? null;
+      const nextLedger = recentLedgerPayload.data?.items ?? [];
 
       setTenant(nextTenant);
       setApplications(nextApplications);
@@ -130,6 +149,7 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
         )
       );
       setPolicies(nextPolicies);
+      setRecentLedger(nextLedger);
       setQuotaForm({
         requestLimitMonthly: nextQuota?.requestLimitMonthly ?? null,
         tokenLimitMonthly: nextQuota?.tokenLimitMonthly ?? null,
@@ -434,6 +454,58 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
                     <dd className="mono text-xs text-slate-700">{quotaForm.hardThresholdPercent}%</dd>
                   </div>
                 </dl>
+              </div>
+            </div>
+          ) : null}
+
+          {initialTab === "ledger" ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900">Recent ledger activity</h2>
+                  <p className="mono mt-0.5 text-xs text-slate-400">Latest 20 request-level evidence records for this tenant</p>
+                </div>
+                <Link
+                  href={`/ledger`}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 mono text-xs text-slate-600 transition-colors duration-150 hover:bg-slate-50"
+                >
+                  Open full ledger
+                </Link>
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-slate-200">
+                <table className="w-full" aria-label="Recent ledger table">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50">
+                      <th className="px-4 py-2.5 text-left mono text-xs font-medium text-slate-400">Request</th>
+                      <th className="px-4 py-2.5 text-left mono text-xs font-medium text-slate-400">Application</th>
+                      <th className="px-4 py-2.5 text-left mono text-xs font-medium text-slate-400">Status</th>
+                      <th className="px-4 py-2.5 text-left mono text-xs font-medium text-slate-400">Latency</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {recentLedger.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-6 text-sm text-slate-500">
+                          No recent ledger activity.
+                        </td>
+                      </tr>
+                    ) : (
+                      recentLedger.map((item) => (
+                        <tr key={item.requestId} className="transition-colors duration-100 hover:bg-slate-50/60">
+                          <td className="px-4 py-3">
+                            <Link href={`/ledger?request_id=${item.requestId}`} className="mono text-xs font-semibold text-slate-900 hover:text-sky-600">
+                              {item.requestId}
+                            </Link>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-slate-700">{item.applicationName}</td>
+                          <td className="px-4 py-3 mono text-xs text-slate-700">{item.status}</td>
+                          <td className="px-4 py-3 mono text-xs text-slate-500">{item.latencyMs ?? 0} ms</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           ) : null}

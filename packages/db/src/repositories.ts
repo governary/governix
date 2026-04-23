@@ -5,6 +5,7 @@ import type {
   CreateApplicationInput,
   CreatePolicyInput,
   CreateTenantInput,
+  LedgerListQuery,
   PolicyEvaluationResult,
   RuntimeEventRequest,
   TenantListQuery,
@@ -15,7 +16,7 @@ import type {
 } from "@governix/shared";
 
 import { getDb } from "./client";
-import { applications, policyEvaluationLogs, requestLedger, tenantPolicies, tenantQuotas, tenants, usageDaily, users } from "./schema";
+import { applications, auditExports, policyEvaluationLogs, requestLedger, tenantPolicies, tenantQuotas, tenants, usageDaily, users } from "./schema";
 
 function getMonthRange(referenceAt: Date) {
   const start = new Date(Date.UTC(referenceAt.getUTCFullYear(), referenceAt.getUTCMonth(), 1, 0, 0, 0, 0));
@@ -395,6 +396,135 @@ export const requestLedgerRepository = {
       .from(requestLedger)
       .where(and(...filters))
       .orderBy(desc(requestLedger.createdAt));
+  },
+
+  async list(query: LedgerListQuery) {
+    const filters = [
+      gte(requestLedger.createdAt, new Date(`${query.dateFrom}T00:00:00Z`)),
+      lte(requestLedger.createdAt, new Date(`${query.dateTo}T23:59:59.999Z`))
+    ];
+
+    if (query.tenantId) {
+      filters.push(eq(requestLedger.tenantId, query.tenantId));
+    }
+
+    if (query.applicationId) {
+      filters.push(eq(requestLedger.applicationId, query.applicationId));
+    }
+
+    if (query.status !== "all") {
+      filters.push(eq(requestLedger.status, query.status));
+    }
+
+    if (query.modelId) {
+      filters.push(eq(requestLedger.selectedModelId, query.modelId));
+    }
+
+    if (query.kbId) {
+      filters.push(eq(requestLedger.selectedKbId, query.kbId));
+    }
+
+    if (query.requestId) {
+      filters.push(eq(requestLedger.requestId, query.requestId));
+    }
+
+    const whereClause = and(...filters);
+    const offset = (query.page - 1) * query.pageSize;
+    const db = getDb();
+
+    const [items, totalRows] = await Promise.all([
+      db
+        .select({
+          id: requestLedger.id,
+          requestId: requestLedger.requestId,
+          tenantId: requestLedger.tenantId,
+          tenantName: tenants.name,
+          applicationId: requestLedger.applicationId,
+          applicationName: applications.name,
+          requestType: requestLedger.requestType,
+          selectedModelId: requestLedger.selectedModelId,
+          selectedKbId: requestLedger.selectedKbId,
+          status: requestLedger.status,
+          estimatedCost: requestLedger.estimatedCost,
+          latencyMs: requestLedger.latencyMs,
+          createdAt: requestLedger.createdAt
+        })
+        .from(requestLedger)
+        .innerJoin(tenants, eq(requestLedger.tenantId, tenants.id))
+        .innerJoin(applications, eq(requestLedger.applicationId, applications.id))
+        .where(whereClause)
+        .orderBy(desc(requestLedger.createdAt))
+        .limit(query.pageSize)
+        .offset(offset),
+      db.select({ id: requestLedger.id }).from(requestLedger).where(whereClause)
+    ]);
+
+    return {
+      items,
+      total: totalRows.length,
+      page: query.page,
+      pageSize: query.pageSize
+    };
+  },
+
+  async findDetailByRequestId(requestId: string) {
+    const [entry] = await getDb()
+      .select({
+        id: requestLedger.id,
+        requestId: requestLedger.requestId,
+        tenantId: requestLedger.tenantId,
+        tenantName: tenants.name,
+        applicationId: requestLedger.applicationId,
+        applicationName: applications.name,
+        userId: requestLedger.userId,
+        sessionId: requestLedger.sessionId,
+        requestType: requestLedger.requestType,
+        rawQuerySummary: requestLedger.rawQuerySummary,
+        selectedModelId: requestLedger.selectedModelId,
+        selectedKbId: requestLedger.selectedKbId,
+        policyResultJson: requestLedger.policyResultJson,
+        retrievalFilterJson: requestLedger.retrievalFilterJson,
+        retrievedChunksJson: requestLedger.retrievedChunksJson,
+        generationSummaryText: requestLedger.generationSummaryText,
+        citationsPresent: requestLedger.citationsPresent,
+        status: requestLedger.status,
+        latencyMs: requestLedger.latencyMs,
+        inputTokens: requestLedger.inputTokens,
+        outputTokens: requestLedger.outputTokens,
+        embeddingCount: requestLedger.embeddingCount,
+        estimatedCost: requestLedger.estimatedCost,
+        errorCode: requestLedger.errorCode,
+        errorMessage: requestLedger.errorMessage,
+        createdAt: requestLedger.createdAt
+      })
+      .from(requestLedger)
+      .innerJoin(tenants, eq(requestLedger.tenantId, tenants.id))
+      .innerJoin(applications, eq(requestLedger.applicationId, applications.id))
+      .where(eq(requestLedger.requestId, requestId))
+      .limit(1);
+
+    return entry ?? null;
+  },
+
+  async listRecentByTenantId(tenantId: string, limit = 20) {
+    return getDb()
+      .select({
+        requestId: requestLedger.requestId,
+        applicationId: requestLedger.applicationId,
+        applicationName: applications.name,
+        requestType: requestLedger.requestType,
+        selectedModelId: requestLedger.selectedModelId,
+        selectedKbId: requestLedger.selectedKbId,
+        status: requestLedger.status,
+        estimatedCost: requestLedger.estimatedCost,
+        latencyMs: requestLedger.latencyMs,
+        createdAt: requestLedger.createdAt
+      })
+      .from(requestLedger)
+      .innerJoin(applications, eq(requestLedger.applicationId, applications.id))
+      .where(eq(requestLedger.tenantId, tenantId))
+      .orderBy(desc(requestLedger.createdAt))
+      .limit(limit);
   }
 };
 
@@ -477,5 +607,44 @@ export const usageDailyRepository = {
       .from(usageDaily)
       .where(and(...filters))
       .orderBy(desc(usageDaily.usageDate));
+  }
+};
+
+export const auditExportRepository = {
+  async create(input: {
+    requestedBy: string;
+    exportType: string;
+    tenantScopeJson: Record<string, unknown>;
+    dateFrom: Date;
+    dateTo: Date;
+    format: string;
+    status: string;
+  }) {
+    const [entry] = await getDb()
+      .insert(auditExports)
+      .values(input)
+      .returning();
+
+    return entry;
+  },
+
+  async findById(id: string) {
+    const [entry] = await getDb().select().from(auditExports).where(eq(auditExports.id, id)).limit(1);
+    return entry ?? null;
+  },
+
+  async update(id: string, input: { status?: string; fileUrl?: string | null; errorMessage?: string | null }) {
+    const [entry] = await getDb()
+      .update(auditExports)
+      .set({
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(input.fileUrl !== undefined ? { fileUrl: input.fileUrl } : {}),
+        ...(input.errorMessage !== undefined ? { errorMessage: input.errorMessage } : {}),
+        updatedAt: new Date()
+      })
+      .where(eq(auditExports.id, id))
+      .returning();
+
+    return entry ?? null;
   }
 };

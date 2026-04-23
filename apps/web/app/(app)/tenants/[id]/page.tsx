@@ -13,7 +13,7 @@ export default async function TenantDetailPage({
 }) {
   const [{ id }, resolvedSearchParams] = await Promise.all([params, searchParams]);
   const tab = resolvedSearchParams.tab;
-  const initialTab = tab === "applications" || tab === "quota" || tab === "policy" ? tab : "overview";
+  const initialTab = tab === "applications" || tab === "quota" || tab === "policy" || tab === "ledger" ? tab : "overview";
 
   return <TenantDetailClient tenantId={id} initialTab={initialTab} />;
 }
