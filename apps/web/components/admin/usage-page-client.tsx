@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import type { UsageGroupBy } from "@governix/shared";
+import type { AlertState, UsageGroupBy } from "@governix/shared";
 
-import { requestJson } from "../../lib/client-api";
+import { AlertStateBadge, InlineNotice, QuotaProgressBar } from "./ui-primitives";
+import { getApiErrorDetails, requestJson } from "../../lib/client-api";
 
 type SummaryItem = {
   tenantId?: string;
@@ -22,7 +23,7 @@ type SummaryItem = {
   blockedCount: number;
   throttledCount: number;
   quotaUsagePercent?: number | null;
-  alertState?: string | null;
+  alertState?: AlertState | null;
 };
 
 type UsageSummaryResponse = {
@@ -64,6 +65,7 @@ export function UsagePageClient() {
   const [tenantSummary, setTenantSummary] = useState<UsageSummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string[]>([]);
 
   useEffect(() => {
     void loadUsage(groupBy, dateFrom, dateTo);
@@ -86,8 +88,10 @@ export function UsagePageClient() {
 
       setSummary(summaryPayload.data ?? null);
       setTenantSummary(tenantPayload.data ?? null);
+      setErrorDetails([]);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to load usage data.");
+      setErrorDetails(getApiErrorDetails(requestError));
     } finally {
       setLoading(false);
     }
@@ -122,7 +126,7 @@ export function UsagePageClient() {
         </a>
       </div>
 
-      {error ? <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+      {error ? <InlineNotice tone="error" message={error} details={errorDetails} /> : null}
 
       <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-4 grid gap-4 md:grid-cols-[180px_180px_180px_auto]">
@@ -169,7 +173,10 @@ export function UsagePageClient() {
                 topTenants.map((item) => (
                   <div key={item.tenantId} className="flex items-center justify-between">
                     <span className="text-sm text-slate-700">{item.tenantName}</span>
-                    <span className="mono text-xs text-slate-500">{item.requestCount} req</span>
+                    <div className="flex items-center gap-2">
+                      <QuotaProgressBar value={item.quotaUsagePercent ?? null} />
+                      <span className="mono text-xs text-slate-500">{item.requestCount} req</span>
+                    </div>
                   </div>
                 ))
               )}
@@ -185,7 +192,7 @@ export function UsagePageClient() {
                 overLimitTenants.map((item) => (
                   <div key={item.tenantId} className="flex items-center justify-between">
                     <span className="text-sm text-slate-700">{item.tenantName}</span>
-                    <span className="mono text-xs text-slate-500">{item.alertState}</span>
+                    <AlertStateBadge state={item.alertState ?? null} />
                   </div>
                 ))
               )}
@@ -250,7 +257,15 @@ export function UsagePageClient() {
                   <td className="hidden px-4 py-3 mono text-xs text-slate-500 md:table-cell">{item.inputTokens}</td>
                   <td className="hidden px-4 py-3 mono text-xs text-slate-500 md:table-cell">{item.outputTokens}</td>
                   <td className="px-4 py-3 mono text-xs text-slate-700">${item.estimatedCost.toFixed(6)}</td>
-                  <td className="px-4 py-3 mono text-xs text-slate-500">{item.alertState ?? "n/a"}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <AlertStateBadge
+                        state={item.alertState ?? null}
+                        testId={item.tenantId ? `usage-alert-state-${item.tenantId}` : undefined}
+                      />
+                      <QuotaProgressBar value={item.quotaUsagePercent ?? null} />
+                    </div>
+                  </td>
                 </tr>
               ))
             )}

@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 
-import type { CreateApplicationInput, UpsertQuotaInput } from "@governix/shared";
+import type { AlertState, CreateApplicationInput, UpsertQuotaInput } from "@governix/shared";
 
-import { requestJson } from "../../lib/client-api";
+import { AlertStateBadge, InlineNotice, QuotaProgressBar } from "./ui-primitives";
+import { getApiErrorDetails, requestJson } from "../../lib/client-api";
 
 type TenantRecord = {
   id: string;
@@ -66,6 +67,17 @@ type LedgerShortcutRecord = {
   createdAt: string;
 };
 
+type TenantUsagePayload = {
+  summary: {
+    requestCount: number;
+    estimatedCost: number;
+    blockedCount: number;
+    throttledCount: number;
+    quotaUsagePercent: number | null;
+    alertState: AlertState | null;
+  };
+};
+
 type TenantTab = "overview" | "applications" | "quota" | "policy" | "ledger";
 
 const inputClassName =
@@ -108,7 +120,9 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
   const [recentApiKey, setRecentApiKey] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tenantUsage, setTenantUsage] = useState<TenantUsagePayload["summary"] | null>(null);
 
   useEffect(() => {
     void loadTenantDetail();
@@ -118,14 +132,17 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
     setLoading(true);
 
     try {
-      const [tenantPayload, applicationsPayload, policiesPayload, quotaPayload, recentLedgerPayload] = await Promise.all([
+      const today = new Date().toISOString().slice(0, 10);
+      const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString().slice(0, 10);
+      const [tenantPayload, applicationsPayload, policiesPayload, quotaPayload, recentLedgerPayload, usagePayload] = await Promise.all([
         requestJson<TenantRecord>(`/api/tenants/${tenantId}`),
         requestJson<ApplicationRecord[]>(`/api/tenants/${tenantId}/applications`),
         requestJson<PolicyRecord[]>(`/api/tenants/${tenantId}/policies`),
         requestJson<QuotaRecord | null>(`/api/tenants/${tenantId}/quotas`),
         requestJson<{ items: LedgerShortcutRecord[]; total: number; page: number; pageSize: number }>(
           `/api/ledger?tenant_id=${tenantId}&status=all&date_from=2026-01-01&date_to=2026-12-31&page=1&page_size=20`
-        )
+        ),
+        requestJson<TenantUsagePayload>(`/api/tenants/${tenantId}/usage?date_from=${monthStart}&date_to=${today}`)
       ]);
 
       const nextTenant = tenantPayload.data ?? null;
@@ -150,6 +167,7 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
       );
       setPolicies(nextPolicies);
       setRecentLedger(nextLedger);
+      setTenantUsage(usagePayload.data?.summary ?? null);
       setQuotaForm({
         requestLimitMonthly: nextQuota?.requestLimitMonthly ?? null,
         tokenLimitMonthly: nextQuota?.tokenLimitMonthly ?? null,
@@ -168,8 +186,10 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
       }
 
       setError(null);
+      setErrorDetails([]);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to load tenant detail.");
+      setErrorDetails(getApiErrorDetails(requestError));
     } finally {
       setLoading(false);
     }
@@ -179,6 +199,7 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
     event.preventDefault();
     setMessage(null);
     setError(null);
+    setErrorDetails([]);
 
     try {
       const payload = await requestJson<TenantRecord>(`/api/tenants/${tenantId}`, {
@@ -196,6 +217,7 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
       await loadTenantDetail();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to update tenant.");
+      setErrorDetails(getApiErrorDetails(requestError));
     }
   }
 
@@ -203,6 +225,7 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
     event.preventDefault();
     setMessage(null);
     setError(null);
+    setErrorDetails([]);
 
     try {
       const payload = await requestJson<{ application: ApplicationRecord; apiKey: string }>(`/api/tenants/${tenantId}/applications`, {
@@ -221,12 +244,19 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
       await loadTenantDetail();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to create application.");
+      setErrorDetails(getApiErrorDetails(requestError));
     }
   }
 
   async function onSaveApplication(applicationId: string) {
     setMessage(null);
     setError(null);
+    setErrorDetails([]);
+
+    const nextStatus = applicationDrafts[applicationId]?.status;
+    if (nextStatus === "archived" && !window.confirm("Archive this application? Archived applications can no longer use runtime API keys.")) {
+      return;
+    }
 
     try {
       const payload = await requestJson<ApplicationRecord>(`/api/applications/${applicationId}`, {
@@ -239,12 +269,18 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
       await loadTenantDetail();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to update application.");
+      setErrorDetails(getApiErrorDetails(requestError));
     }
   }
 
   async function onRotateKey(applicationId: string) {
     setMessage(null);
     setError(null);
+    setErrorDetails([]);
+
+    if (!window.confirm("Rotate this application API key? The previous plaintext key cannot be recovered.")) {
+      return;
+    }
 
     try {
       const payload = await requestJson<{ application: ApplicationRecord; apiKey: string }>(`/api/applications/${applicationId}/rotate-key`, {
@@ -256,6 +292,7 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
       await loadTenantDetail();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to rotate API key.");
+      setErrorDetails(getApiErrorDetails(requestError));
     }
   }
 
@@ -263,6 +300,7 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
     event.preventDefault();
     setMessage(null);
     setError(null);
+    setErrorDetails([]);
 
     try {
       const payload = await requestJson<QuotaRecord>(`/api/tenants/${tenantId}/quotas`, {
@@ -275,6 +313,7 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
       await loadTenantDetail();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to update quota.");
+      setErrorDetails(getApiErrorDetails(requestError));
     }
   }
 
@@ -287,17 +326,17 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
           <h1 className="text-base font-bold text-slate-900">{tenant?.name ?? "Tenant Detail"}</h1>
           <p className="mono mt-0.5 text-xs text-slate-400">{tenant?.externalKey ?? tenantId}</p>
         </div>
-        {tenant ? <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 mono text-xs text-slate-600">{tenant.status}</span> : null}
+        <div className="flex items-center gap-2">
+          {tenantUsage ? <AlertStateBadge state={tenantUsage.alertState} testId="tenant-detail-alert-state" /> : null}
+          {tenant ? <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 mono text-xs text-slate-600">{tenant.status}</span> : null}
+        </div>
       </div>
 
-      {message ? <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
-      {error ? <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+      {message ? <InlineNotice tone="success" message={message} /> : null}
+      {error ? <InlineNotice tone="error" message={error} details={errorDetails} /> : null}
 
       {recentApiKey ? (
-        <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3">
-          <p className="text-sm font-semibold text-sky-900">Plaintext API key</p>
-          <p className="mono mt-1 text-xs text-sky-700">{recentApiKey}</p>
-        </div>
+        <InlineNotice tone="info" message="Plaintext API key" details={[recentApiKey]} />
       ) : null}
 
       {loading ? (
@@ -432,6 +471,10 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <h2 className="text-sm font-semibold text-slate-900">Quota Summary</h2>
                 <p className="mono mt-0.5 text-xs text-slate-400">Current thresholds that can influence runtime downgrade or block decisions</p>
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <AlertStateBadge state={tenantUsage?.alertState ?? null} />
+                  <QuotaProgressBar value={tenantUsage?.quotaUsagePercent ?? null} testId="tenant-detail-quota-progress" />
+                </div>
                 <dl className="mt-4 space-y-3">
                   <div>
                     <dt className="mono text-xs text-slate-400">Monthly request limit</dt>
@@ -685,6 +728,10 @@ export function TenantDetailClient({ tenantId, initialTab }: { tenantId: string;
               <div className="mb-4">
                 <h2 className="text-sm font-semibold text-slate-900">Quota Settings</h2>
                 <p className="mono mt-0.5 text-xs text-slate-400">Monthly limits and soft or hard thresholds for advisory enforcement</p>
+              </div>
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <AlertStateBadge state={tenantUsage?.alertState ?? null} />
+                <QuotaProgressBar value={tenantUsage?.quotaUsagePercent ?? null} />
               </div>
 
               <form onSubmit={onSaveQuota} className="grid gap-4 lg:grid-cols-2">

@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useDeferredValue, useEffect, useState, type FormEvent } from "react";
 
-import type { CreateTenantInput } from "@governix/shared";
+import type { AlertState, CreateTenantInput } from "@governix/shared";
 
-import { requestJson } from "../../lib/client-api";
+import { AlertStateBadge, InlineNotice, QuotaProgressBar } from "./ui-primitives";
+import { getApiErrorDetails, requestJson } from "../../lib/client-api";
 
 type TenantRecord = {
   id: string;
@@ -24,6 +25,17 @@ type TenantListResponse = {
   pageSize: number;
 };
 
+type TenantUsageSummaryItem = {
+  tenantId: string;
+  requestCount: number;
+  quotaUsagePercent: number | null;
+  alertState: AlertState | null;
+};
+
+type UsageSummaryResponse = {
+  items: TenantUsageSummaryItem[];
+};
+
 const inputClassName =
   "block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 mono text-sm text-slate-900 transition-colors duration-150 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500";
 
@@ -35,10 +47,12 @@ export function TenantsPageClient() {
   const [status, setStatus] = useState<"all" | "active" | "paused" | "archived">("all");
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<TenantRecord[]>([]);
+  const [usageByTenantId, setUsageByTenantId] = useState<Record<string, TenantUsageSummaryItem>>({});
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string[]>([]);
   const [form, setForm] = useState<CreateTenantInput>({
     name: "",
     externalKey: null,
@@ -60,12 +74,23 @@ export function TenantsPageClient() {
         page: String(page),
         page_size: "10"
       });
-      const payload = await requestJson<TenantListResponse>(`/api/tenants?${params.toString()}`);
-      setItems(payload.data?.items ?? []);
-      setTotal(payload.data?.total ?? 0);
+      const now = new Date();
+      const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+      const today = now.toISOString().slice(0, 10);
+      const [tenantPayload, usagePayload] = await Promise.all([
+        requestJson<TenantListResponse>(`/api/tenants?${params.toString()}`),
+        requestJson<UsageSummaryResponse>(`/api/usage/summary?date_from=${monthStart}&date_to=${today}&group_by=tenant`)
+      ]);
+      setItems(tenantPayload.data?.items ?? []);
+      setTotal(tenantPayload.data?.total ?? 0);
+      setUsageByTenantId(
+        Object.fromEntries((usagePayload.data?.items ?? []).map((item) => [item.tenantId, item]))
+      );
       setError(null);
+      setErrorDetails([]);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to load tenants.");
+      setErrorDetails(getApiErrorDetails(requestError));
     } finally {
       setLoading(false);
     }
@@ -75,6 +100,13 @@ export function TenantsPageClient() {
     event.preventDefault();
     setMessage(null);
     setError(null);
+    setErrorDetails([]);
+
+    if (!form.name.trim()) {
+      setError("Invalid request payload.");
+      setErrorDetails(["name: Tenant name is required."]);
+      return;
+    }
 
     try {
       const payload = await requestJson<TenantRecord>("/api/tenants", {
@@ -96,6 +128,7 @@ export function TenantsPageClient() {
       await loadTenants();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to create tenant.");
+      setErrorDetails(getApiErrorDetails(requestError));
     }
   }
 
@@ -111,8 +144,8 @@ export function TenantsPageClient() {
         <div className="mono text-xs text-slate-400">{total} total tenants</div>
       </div>
 
-      {message ? <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
-      {error ? <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+      {message ? <InlineNotice tone="success" message={message} /> : null}
+      {error ? <InlineNotice tone="error" message={error} details={errorDetails} /> : null}
 
       <div className="mb-6 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -166,20 +199,22 @@ export function TenantsPageClient() {
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
                   <th className="px-4 py-2.5 text-left mono text-xs font-medium text-slate-400">Tenant</th>
-                  <th className="px-4 py-2.5 text-left mono text-xs font-medium text-slate-400">Status</th>
-                  <th className="hidden px-4 py-2.5 text-left mono text-xs font-medium text-slate-400 md:table-cell">Updated</th>
+                  <th className="px-4 py-2.5 text-left mono text-xs font-medium text-slate-400">Lifecycle</th>
+                  <th className="px-4 py-2.5 text-left mono text-xs font-medium text-slate-400">Alert</th>
+                  <th className="hidden px-4 py-2.5 text-left mono text-xs font-medium text-slate-400 lg:table-cell">Quota</th>
+                  <th className="hidden px-4 py-2.5 text-left mono text-xs font-medium text-slate-400 md:table-cell">Requests MTD</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={3} className="px-4 py-6 text-sm text-slate-500">
+                    <td colSpan={5} className="px-4 py-6 text-sm text-slate-500">
                       Loading tenants...
                     </td>
                   </tr>
                 ) : items.length === 0 ? (
                   <tr>
-                    <td colSpan={3} className="px-4 py-6 text-sm text-slate-500">
+                    <td colSpan={5} className="px-4 py-6 text-sm text-slate-500">
                       No tenants match the current filters.
                     </td>
                   </tr>
@@ -199,8 +234,17 @@ export function TenantsPageClient() {
                           {tenant.status}
                         </span>
                       </td>
+                      <td className="px-4 py-3">
+                        <AlertStateBadge
+                          state={usageByTenantId[tenant.id]?.alertState ?? null}
+                          testId={`tenant-alert-state-${tenant.id}`}
+                        />
+                      </td>
+                      <td className="hidden px-4 py-3 lg:table-cell">
+                        <QuotaProgressBar value={usageByTenantId[tenant.id]?.quotaUsagePercent ?? null} />
+                      </td>
                       <td className="hidden px-4 py-3 mono text-xs text-slate-500 md:table-cell">
-                        {new Date(tenant.updatedAt).toLocaleDateString("en-US")}
+                        {usageByTenantId[tenant.id]?.requestCount ?? 0}
                       </td>
                     </tr>
                   ))

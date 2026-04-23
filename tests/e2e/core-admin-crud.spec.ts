@@ -68,6 +68,7 @@ test("tenant applications support create, rotate key, and disable flows", async 
   await expect(page.getByText(/govx_/)).toBeVisible();
 
   const row = page.getByRole("row", { name: new RegExp(appName) });
+  page.once("dialog", (dialog) => dialog.accept());
   await row.getByRole("button", { name: "Rotate key" }).click();
 
   await expect(page.getByText("API key rotated.")).toBeVisible();
