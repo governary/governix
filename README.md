@@ -34,6 +34,7 @@ Out of scope in MVP:
 - `packages/runtime-sdk-ts`: TypeScript runtime SDK for integrators
 - `docs`: PRD, technical spec, UI template, and operator docs
 - `examples/runtime-sdk-ts`: minimal integration examples
+- `examples/bedrock-demo`: Terraform-based Bedrock Knowledge Base RAG demo
 
 ## Quick start
 
@@ -79,6 +80,28 @@ Seed runtime API key for the seeded active applications:
 
 - API key: `govx_demo_app_key`
 
+## Bedrock demo
+
+This repo includes a Bedrock infrastructure example at [examples/bedrock-demo/README.md](examples/bedrock-demo/README.md).
+
+It provisions a small Terraform-based RAG demo with:
+
+- an S3 source bucket with sample documents
+- a Bedrock Knowledge Base
+- an S3 data source
+- an OpenSearch Serverless vector store
+
+Typical flow:
+
+1. `cd examples/bedrock-demo`
+2. `cp terraform.tfvars.example terraform.tfvars`
+3. `terraform init`
+4. `terraform apply`
+5. start a Bedrock ingestion job
+6. test with `aws bedrock-agent-runtime retrieve-and-generate`
+
+See the full walkthrough in [examples/bedrock-demo/README.md](examples/bedrock-demo/README.md).
+
 ## Environment variables
 
 Required variables are defined in `.env.example`.
@@ -121,6 +144,7 @@ See:
 - [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
 - [examples/runtime-sdk-ts/minimal.ts](examples/runtime-sdk-ts/minimal.ts)
 - [examples/runtime-sdk-ts/retrieve-and-generate.ts](examples/runtime-sdk-ts/retrieve-and-generate.ts)
+- [examples/bedrock-demo/README.md](examples/bedrock-demo/README.md)
 
 ## Testing
 
@@ -147,3 +171,4 @@ PLAYWRIGHT_BASE_URL=http://127.0.0.1:3000 npm run test:e2e
 - [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md)
 - [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
 - [docs/RUNTIME_INTEGRATION.md](docs/RUNTIME_INTEGRATION.md)
+- [examples/bedrock-demo/README.md](examples/bedrock-demo/README.md)
